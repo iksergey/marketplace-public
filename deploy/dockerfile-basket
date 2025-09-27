@@ -1,0 +1,43 @@
+# Собирает Docker-образ из указанного Dockerfile, 
+# полностью игнорируя кэш, и присваивает ему тег basket.api:latest
+# docker build --no-cache -t basket.api:latest -f dockerfile-basket .
+
+# Выводит список всех сетей, созданных в Docker на вашем хосте
+# docker network ls
+
+# docker run -d \
+#   --name basket.api \
+#   --network marketplace_default \
+#   -p 7202:8080 \
+#   -e ConnectionStrings__PgConnection="..." \
+#   -e ConnectionStrings__RedisConnection="..." \
+#   -e MediatR__LicenseKey="..." \
+#   basket.api:latest
+
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+WORKDIR /app
+EXPOSE 8080
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+
+COPY ["src/Services/Basket/Basket.API/Basket.API.csproj", "src/Services/Basket/Basket.API/"]
+COPY ["src/Shared/Common.Kernel/Common.Kernel.csproj", "src/Shared/Common.Kernel/"]
+COPY ["src/Shared/Common.Messaging/Common.Messaging.csproj", "src/Shared/Common.Messaging/"]
+COPY ["src/Shared/Common.Logging/Common.Logging.csproj", "src/Shared/Common.Logging/"]
+COPY ["src/Shared/Common.Metrics/Common.Metrics.csproj", "src/Shared/Common.Metrics/"]
+
+RUN dotnet restore "src/Services/Basket/Basket.API/Basket.API.csproj"
+
+COPY . .
+
+RUN dotnet build "src/Services/Basket/Basket.API/Basket.API.csproj" -c Release -o /app/build
+FROM build AS publish
+RUN dotnet publish "src/Services/Basket/Basket.API/Basket.API.csproj" -c Release -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+
+COPY --from=publish /app/publish .
+
+ENTRYPOINT ["dotnet", "Basket.API.dll"]

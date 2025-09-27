@@ -1,0 +1,147 @@
+# docker compose -f docker-compose-dev.yaml up -d --build
+# docker compose -f docker-compose-dev.yaml down -v
+
+services:
+  catalog_db:
+    container_name: catalog-db-dev
+    image: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=12345678
+      - POSTGRES_DB=catalog-db
+    restart: always
+    ports:
+      - "7101:5432"
+    volumes:
+      - postgres_catalog:/var/lib/postgresql/data/
+
+  basket_db:
+    container_name: basket-db-dev
+    image: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=12345678
+      - POSTGRES_DB=basket-db
+    restart: always
+    ports:
+      - "7102:5432"
+    volumes:
+      - postgres_basket:/var/lib/postgresql/data/
+
+  basket_redis:
+    container_name: basket-redis-dev
+    image: redis
+    command: redis-server --requirepass "12345678" --protected-mode no
+    restart: always
+    ports:
+      - "7122:6379"
+    volumes:
+      - redis_basket:/data
+
+  # promotion grpc
+  promotion_db:
+    container_name: promotion-db-dev
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=12345678
+      - MYSQL_DATABASE=promotion-db
+    restart: always
+    ports:
+      - "7103:3306"
+    volumes:
+      - mysql_promotion:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p12345678"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+# Checkout api
+  checkout_db:
+    container_name: checkout-db-dev
+    image: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=12345678
+      - POSTGRES_DB=checkout-db
+    restart: always
+    ports:
+      - "7104:5432"
+    volumes:
+      - postgres_checkout:/var/lib/postgresql/data/
+
+  rabbit_mq:
+    container_name: rabbit-mq-dev
+    image: rabbitmq:3-management
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+
+  elasticsearch:
+    container_name: elasticsearch-dev
+    image: elasticsearch:9.0.3
+    environment:
+      - node.name=elasticsearch-dev
+      - cluster.name=es-docker-cluster-dev
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - action.auto_create_index=true
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  kibana:
+    container_name: kibana-dev
+    image: kibana:9.0.3
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_NAME=kibana-prod
+      - SERVER_HOST=0.0.0.0
+      - ELASTICSEARCH_USERNAME=
+      - ELASTICSEARCH_PASSWORD=
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: always
+
+
+volumes:
+  postgres_catalog:
+  postgres_basket:
+  redis_basket:
+  mysql_promotion:
+  postgres_checkout:
+  rabbitmq_data:
+  elasticsearch_data:

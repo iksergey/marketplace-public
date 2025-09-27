@@ -1,0 +1,310 @@
+# docker compose -p prod -f docker-compose-prod.yaml up -d --build
+# docker compose -p prod -f docker-compose-prod.yaml down -v
+
+services:
+
+# catalog
+  catalog_db:
+    container_name: catalog-db-prod
+    image: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=12345678
+      - POSTGRES_DB=catalog-db
+    restart: always
+    ports:
+      - "7411:5432"
+    volumes:
+      - postgres_catalog_prod:/var/lib/postgresql/data/
+
+  catalog_api:
+    container_name: catalog-api
+    build:
+      context: .
+      dockerfile: ./dockerfile-catalog
+      args:
+        - BUILDKIT_INLINE_CACHE=0
+    ports:
+      - "7301:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      # - ConnectionStrings__PgConnection=...
+      # - MediatR__LicenseKey=...
+    depends_on:
+      catalog_db:
+        condition: service_started
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+
+# basket
+  basket_db:
+    container_name: basket-db-prod
+    image: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=12345678
+      - POSTGRES_DB=basket-db
+    restart: always
+    ports:
+      - "7412:5432"
+    volumes:
+      - postgres_basket_prod:/var/lib/postgresql/data/
+
+  basket_redis:
+    container_name: basket-redis-prod
+    image: redis
+    command: redis-server --requirepass "12345678" --protected-mode no
+    restart: always
+    ports:
+      - "7422:6379"
+    volumes:
+      - redis_basket_prod:/data
+
+  basket_api:
+    container_name: basket-api
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./dockerfile-basket
+      args:
+        - BUILDKIT_INLINE_CACHE=0
+    ports:
+      - "7302:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      # - ConnectionStrings__PgConnection=...
+      # - ConnectionStrings__RedisConnection=...
+      # - GrpcServices__PromotionService=...
+      # - MediatR__LicenseKey=...
+    depends_on:
+      basket_db:
+        condition: service_started
+      basket_redis:
+        condition: service_started
+      promotion_api:
+        condition: service_started
+      rabbit_mq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # promotion grpc
+  promotion_db:
+    container_name: promotion-db-prod
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=12345678
+      - MYSQL_DATABASE=promotion-db
+    restart: always
+    ports:
+      - "7403:3306"
+    volumes:
+      - mysql_promotion:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p12345678"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  promotion_api:
+    container_name: promotion-api
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: ./dockerfile-promotion
+      args:
+        - BUILDKIT_INLINE_CACHE=0
+    ports:
+      - "7303:8080"
+      - "7313:8081"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      # - ConnectionStrings__MySqlConnection="..." 
+      # - MediatR__LicenseKey="..." 
+    depends_on:
+      promotion_db:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+
+# Checkout api
+  checkout_db:
+    container_name: checkout-db-prod
+    image: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=12345678
+      - POSTGRES_DB=checkout-db
+    restart: always
+    ports:
+      - "7404:5432"
+    volumes:
+      - postgres_checkout:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  checkout_api:
+    container_name: checkout-api
+    build:
+      context: .
+      dockerfile: ./dockerfile-checkout
+      args:
+        - BUILDKIT_INLINE_CACHE=0
+    ports:
+      - "7304:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      # - ConnectionStrings__PgConnection=...
+      # - MediatR__LicenseKey=...
+    depends_on:
+      checkout_db:
+        condition: service_healthy
+      rabbit_mq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+# RabbitMQ
+  rabbit_mq:
+    container_name: rabbit-mq-prod
+    image: rabbitmq:3-management
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+
+  elasticsearch:
+    container_name: elasticsearch-prod
+    image: elasticsearch:9.0.3
+    environment:
+      - node.name=elasticsearch-prod
+      - cluster.name=es-docker-cluster-prod
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - action.auto_create_index=true
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  kibana:
+    container_name: kibana-prod
+    image: kibana:9.0.3
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_NAME=kibana-prod
+      - SERVER_HOST=0.0.0.0
+      - ELASTICSEARCH_USERNAME=
+      - ELASTICSEARCH_PASSWORD=
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: always
+
+# Добавляем k6
+  k6-catalog-load:
+    container_name: k6-catalog-load-prod
+    image: grafana/k6:latest
+    volumes:
+      - ./k6:/scripts
+    working_dir: /scripts
+    entrypoint: ["k6", "run", "catalog-api-load-test.js"]
+    environment:
+      - BASE_URL_CATALOG=http://catalog_api:8080
+    depends_on:
+      - catalog_api
+
+  k6-catalog-create:
+    container_name: k6-catalog-create-prod
+    image: grafana/k6:latest
+    volumes:
+      - ./k6:/scripts
+    working_dir: /scripts
+    entrypoint: ["k6", "run", "catalog-api-create-items-test.js"]
+    environment:
+      - BASE_URL_CATALOG=http://catalog_api:8080
+    depends_on:
+      catalog_api:
+        condition: service_started
+      elasticsearch:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+  portainer:
+    container_name: portainer-prod
+    image: portainer/portainer-ce:latest
+    restart: always
+    ports:
+      - "9000:9000"
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+volumes:
+  postgres_catalog_prod:
+  postgres_basket_prod:
+  redis_basket_prod:
+  mysql_promotion:
+  postgres_checkout:
+  rabbitmq_data:
+  elasticsearch_data:
+  prometheus_data:
+  grafana_data:
+  portainer_data:
+  
