@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: 'catalog-api'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['catalog_api:8080']
+
+  - job_name: 'basket-api'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['basket_api:8080']
+
+  - job_name: 'checkout-api'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['checkout_api:8080']
+
+  - job_name: 'promotion-grpc'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['promotion_api:8080'] 
